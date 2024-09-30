@@ -6,8 +6,31 @@ const axios = require('axios');
 const queriesFilePath = path.join(__dirname, '..', 'UserQuerys.json');
 const tokensFilePath = path.join(__dirname, '..', 'sessionTokens.txt');
 
+// Función para cargar los tokens desde sessionTokens.txt
+function loadTokens() {
+    let tokens = [];
+    if (fs.existsSync(tokensFilePath)) {
+        try {
+            const tokensData = fs.readFileSync(tokensFilePath, 'utf-8');
+            tokens = JSON.parse(tokensData);
+        } catch (err) {
+            console.error('Error loading tokens:', err.message);
+        }
+    }
+    return tokens;
+}
+
+// Función para guardar los tokens en sessionTokens.txt
+function saveTokens(tokens) {
+    try {
+        fs.writeFileSync(tokensFilePath, JSON.stringify(tokens, null, 2));
+    } catch (err) {
+        console.error('Error saving tokens:', err.message);
+    }
+}
+
 // Función para obtener el token de sesión
-async function getSessionToken(queryId) {
+async function getSessionToken(queryId, accountIndex) {
     try {
         const response = await axios.post('https://api.chaingn.org/auth/login', {
             OAuth: queryId
@@ -15,35 +38,18 @@ async function getSessionToken(queryId) {
 
         if (response.status === 200) {
             const sessionToken = response.data.sessionToken;
-            saveToken(sessionToken);
+            // Cargar tokens existentes
+            let tokens = loadTokens();
+            // Actualizar o agregar el token en la posición correspondiente
+            tokens[accountIndex] = sessionToken;
+            // Guardar los tokens actualizados
+            saveTokens(tokens);
             return sessionToken;
         } else {
             return null;
         }
     } catch (error) {
         throw error;
-    }
-}
-
-// Función para guardar el token en sessionTokens.txt
-function saveToken(token) {
-    let tokens = [];
-
-    if (fs.existsSync(tokensFilePath)) {
-        try {
-            const tokensData = fs.readFileSync(tokensFilePath, 'utf-8');
-            tokens = JSON.parse(tokensData);
-        } catch (err) {
-            return;
-        }
-    }
-
-    tokens.push(token);
-
-    try {
-        fs.writeFileSync(tokensFilePath, JSON.stringify(tokens, null, 2));
-    } catch (err) {
-        // No imprimir errores aquí
     }
 }
 
@@ -86,16 +92,16 @@ async function getWallets(sessionToken) {
 }
 
 // Función para reclamar recompensas
-async function claimRewards(sessionToken, userId) {
+async function claimRewards(sessionToken, walletId) {
     try {
-        const response = await axios.post('https://api.chaingn.org/wallet/claim', { id: userId }, {
+        const response = await axios.post('https://api.chaingn.org/wallet/claim', { id: walletId }, {
             headers: {
                 Authorization: `Bearer ${sessionToken}`
             }
         });
 
         if (response.status === 200) {
-            return response.data; // Debería ser algo como { "id": "437673" }
+            return response.data;
         } else {
             return null;
         }
@@ -114,7 +120,7 @@ async function startFarming(sessionToken, walletId) {
         });
 
         if (response.status === 200) {
-            return response.data; // Debería ser algo como { "id": "529099" }
+            return response.data;
         } else {
             return null;
         }
@@ -133,7 +139,7 @@ async function getSubTasks(sessionToken) {
         });
 
         if (response.status === 200) {
-            return response.data; // Debería ser un arreglo de tareas
+            return response.data;
         } else {
             return null;
         }
@@ -154,7 +160,7 @@ async function autoCompleteTask(sessionToken, recourceId) {
         });
 
         if (response.status === 200) {
-            return response.data; // Debería ser algo como { "id": "803920" }
+            return response.data;
         } else {
             return null;
         }
@@ -175,12 +181,81 @@ async function claimTaskPoints(sessionToken, taskId) {
         });
 
         if (response.status === 200) {
-            return response.data; // Debería ser algo como { "id": "803920" }
+            return response.data;
         } else {
             return null;
         }
     } catch (error) {
         throw error;
+    }
+}
+
+// Función para obtener el estado de las visitas diarias
+async function getDailyVisits(sessionToken) {
+    try {
+        const response = await axios.get('https://api.chaingn.org/user/daily_visits', {
+            headers: {
+                Authorization: `Bearer ${sessionToken}`
+            }
+        });
+
+        if (response.status === 200) {
+            return response.data;
+        } else {
+            return null;
+        }
+    } catch (error) {
+        throw error;
+    }
+}
+
+// Función genérica para realizar una solicitud GET a una URL específica con las cookies necesarias
+async function performGetRequestWithCookies(url, sessionToken, day) {
+    try {
+        const headers = {
+            'Cookie': `sessionToken=${sessionToken}; subscribed=${day}; isVisitToday=true`,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+        };
+
+        const response = await axios.get(url, { headers });
+
+        if (response.status === 200) {
+            return true;
+        } else {
+            return false;
+        }
+    } catch (error) {
+        // Algunos sitios redirigen tras la autenticación, consideramos código 302 como éxito
+        if (error.response && (error.response.status === 302 || error.response.status === 303)) {
+            return true;
+        }
+        throw error;
+    }
+}
+
+// Función para realizar el Check-In diario, incluyendo las solicitudes adicionales
+async function performDailyCheckIn(sessionToken, day) {
+    const urls = [
+        `https://chaingn.org/home?_rsc=yv7o1`,
+        `https://chaingn.org/wallet?_rsc=1ccoy`,
+        `https://chaingn.org/tasks?_rsc=1ccoy`,
+        `https://chaingn.org/upgrade?_rsc=1ccoy`,
+        `https://chaingn.org/team?_rsc=1ccoy`
+    ];
+
+    for (let url of urls) {
+        const success = await performGetRequestWithCookies(url, sessionToken, day);
+        if (!success) {
+            return false;
+        }
+    }
+
+    // Después de realizar todas las solicitudes, obtenemos de nuevo el estado de las visitas
+    const dailyVisits = await getDailyVisits(sessionToken);
+    if (dailyVisits) {
+        return dailyVisits;
+    } else {
+        return false;
     }
 }
 
@@ -192,5 +267,9 @@ module.exports = {
     startFarming, 
     getSubTasks, 
     autoCompleteTask,
-    claimTaskPoints
+    claimTaskPoints,
+    getDailyVisits,
+    performDailyCheckIn,
+    loadTokens,
+    saveTokens
 };
